@@ -190,7 +190,8 @@ class LogFileMonitor:
         self.last_position = 0
         self.last_modified = 0
         self.logger = logging.getLogger(__name__)
-        
+        self.prev_entries = set()
+
         # Regex pattern for extracting rotation data
         self.rotation_pattern = re.compile(
             r'"RotaryAuto:Forward rotation processing starts\. '
@@ -198,37 +199,49 @@ class LogFileMonitor:
         )
     
     def check_for_updates(self) -> List[CowDataEntry]:
-        """Check for new log entries and return parsed data"""
         entries = []
-        
+
         try:
             if not os.path.exists(self.log_path):
                 self.logger.warning(f"Log file not found: {self.log_path}")
                 return entries
-            
+
             current_modified = os.path.getmtime(self.log_path)
             file_size = os.path.getsize(self.log_path)
-            
-            # Check if file was rotated (new file or significantly smaller)
+
+            # Detect rotation
             if current_modified != self.last_modified or file_size < self.last_position:
                 self.last_position = 0
                 self.last_modified = current_modified
                 self.logger.info("Log file rotation detected, resetting position")
-            
-            # Read new content
+
+            # Read new data
             with open(self.log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 f.seek(self.last_position)
                 new_content = f.read()
                 self.last_position = f.tell()
-            
+
             if new_content:
-                entries = self._parse_log_content(new_content)
-                if entries:
-                    self.logger.info(f"Parsed {len(entries)} new entries from log file")
-            
+                parsed_entries = self._parse_log_content(new_content)
+                
+                # Filter out entries already seen in last batch
+                new_unique_entries = []
+                for e in parsed_entries:
+                    key = (e.stall, e.animal_tag, e.timestamp)
+                    if key not in self.prev_entries:
+                        new_unique_entries.append(e)
+
+                # Update the memory for next call
+                self.prev_entries = {(e.stall, e.animal_tag, e.timestamp) for e in parsed_entries}
+
+                if new_unique_entries:
+                    self.logger.info(f"Parsed {len(new_unique_entries)} unique entries from log file")
+                
+                entries = new_unique_entries
+
         except Exception as e:
             self.logger.error(f"Error reading log file: {e}")
-        
+
         return entries
     
     def _parse_log_content(self, content: str) -> List[CowDataEntry]:
@@ -269,6 +282,56 @@ class LogFileMonitor:
             self.logger.debug(f"Error parsing log line: {e}")
         
         return None
+class CSVOutputHandler:
+    """Handles CSV file output as alternative to RevPi communication"""
+    
+    def __init__(self, output_file: str):
+        self.output_file = output_file
+        self.logger = logging.getLogger(__name__)
+        self.lock = threading.Lock()
+        self._initialize_csv_file()
+    
+    def _initialize_csv_file(self):
+        """Initialize CSV file with headers if it doesn't exist"""
+        try:
+            if not os.path.exists(self.output_file):
+                with open(self.output_file, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['timestamp', 'stall', 'eid', 'status'])
+                self.logger.info(f"Created new CSV output file: {self.output_file}")
+        except Exception as e:
+            self.logger.error(f"Error initializing CSV file: {e}")
+    
+    def send_data(self, stall: str, eid: str) -> bool:
+        """Write stall and EID data to CSV file"""
+        try:
+            with self.lock:
+                with open(self.output_file, 'a', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow([
+                        datetime.now().isoformat(),
+                        stall,
+                        eid,
+                        'processed'
+                    ])
+                
+                self.logger.info(f"Successfully wrote data to CSV: {stall} -> {eid}")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error writing data to CSV: {e}")
+            return False
+    
+    def test_connection(self) -> bool:
+        """Test if CSV file can be written to"""
+        try:
+            # Test write access
+            with open(self.output_file, 'a', encoding='utf-8') as f:
+                pass
+            return True
+        except Exception as e:
+            self.logger.error(f"CSV file test failed: {e}")
+            return False
 
 class RevPiCommunicator:
     """Handles network communication with RevPi"""
@@ -325,17 +388,27 @@ class CowDataProcessor:
         self.config = self._load_config(config_path)
         self.running = False
         self.setup_logging()
-        
+        self.logger = logging.getLogger(__name__)
+
         # Initialize components
         self.queue = CircularQueue(self.config.getint('processing', 'queue_size', fallback=100))
         self.id_mapping = IDMapping(self.config.get('files', 'id_mapping_csv'))
         self.log_monitor = LogFileMonitor(self.config.get('files', 'log_file_path'))
-        self.revpi_comm = RevPiCommunicator(
-            self.config.get('network', 'revpi_host'),
-            self.config.getint('network', 'revpi_port')
-        )
+        self.output_mode = self.config.get('output', 'mode', fallback='revpi').lower()
         
-        self.logger = logging.getLogger(__name__)
+        if self.output_mode == 'csv':
+            self.output_handler = CSVOutputHandler(
+                self.config.get('output', 'csv_file', fallback='cow_data_output.csv')
+            )
+            self.logger.info("Using CSV output mode")
+        else:
+            self.output_handler = RevPiCommunicator(
+                self.config.get('network', 'revpi_host'),
+                self.config.getint('network', 'revpi_port')
+            )
+            self.logger.info("Using RevPi output mode")
+
+
         self.stats = {
             'processed_today': 0,
             'errors_today': 0,
@@ -414,12 +487,10 @@ class CowDataProcessor:
         self.logger.info("Starting Cow Data Processing System")
         self.running = True
         
-        # Test RevPi connection
-        if self.revpi_comm.test_connection():
-            self.logger.info("RevPi connection test successful")
+        if self.output_handler.test_connection():
+            self.logger.info(f"{self.output_mode.upper()} connection test successful")
         else:
-            self.logger.warning("RevPi connection test failed - will retry during operation")
-        
+            self.logger.warning(f"{self.output_mode.upper()} connection test failed - will retry during operation")
         # Load initial ID mapping
         self.id_mapping.load_mapping()
         
@@ -444,8 +515,8 @@ class CowDataProcessor:
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
         
         last_mapping_check = 0
-        mapping_check_interval = 60  # Check mapping file every minute
-        
+        mapping_check_interval = 60*60  # Check mapping file every hour
+
         while self.running:
             try:
                 # Check for ID mapping updates
@@ -453,6 +524,8 @@ class CowDataProcessor:
                 if current_time - last_mapping_check > mapping_check_interval:
                     self.id_mapping.load_mapping()
                     last_mapping_check = current_time
+                    self.logger.info(f"Checking for ID mapping updates every {mapping_check_interval / 60:.0f} minutes...")
+
                 
                 # Check for new log entries
                 new_entries = self.log_monitor.check_for_updates()
@@ -464,12 +537,22 @@ class CowDataProcessor:
                     
                     # Add to queue
                     self.queue.add(entry)
-                    self.logger.debug(f"Added entry to queue: {entry.stall} - {entry.animal_tag}")
+
+                    if entry.eid:
+                        self.logger.info(
+                            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] New Animal: "
+                            f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
+                        )
+                    else:
+                        self.logger.info(
+                            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] New Animal: "
+                            f"{entry.stall}-{entry.animal_tag}-NO_EID"
+        )
                 
                 # Check for entries ready for transmission
                 entry_to_transmit = self.queue.get_by_offset(transmission_offset)
                 if entry_to_transmit and not entry_to_transmit.processed and entry_to_transmit.eid:
-                    success = self.revpi_comm.send_data(entry_to_transmit.stall, entry_to_transmit.eid)
+                    success = self.output_handler.send_data(entry_to_transmit.stall, entry_to_transmit.eid)
                     if success:
                         self.queue.mark_processed(entry_to_transmit.position)
                         self.stats['processed_today'] += 1
