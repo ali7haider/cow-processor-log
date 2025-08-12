@@ -1,0 +1,5 @@
+2025-08-12 23:37:51,916 - __main__ - INFO - Starting Cow Data Processing System
+2025-08-12 23:37:56,932 - __main__ - WARNING - RevPi connection test failed - will retry during operation
+2025-08-12 23:37:56,932 - __main__ - INFO - Loaded 10 ID mappings from D:/Personal/Tour/cow-data-processor/scripts/id_to_eid_mapping.csv
+2025-08-12 23:37:56,932 - __main__ - INFO - Log file rotation detected, resetting position
+2025-08-12 23:37:57,010 - __main__ - INFO - Parsed 1431 new entries from log file
