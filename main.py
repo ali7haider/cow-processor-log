@@ -107,35 +107,70 @@ class IDMapping:
         self.logger = logging.getLogger(__name__)
     
     def load_mapping(self) -> bool:
-        """Load ID to EID mapping from CSV file"""
+        """Load ID to EID mapping from CSV file, auto-detecting header and delimiter"""
         try:
             if not os.path.exists(self.csv_path):
                 self.logger.error(f"Mapping CSV file not found: {self.csv_path}")
                 return False
-            
+
             current_modified = os.path.getmtime(self.csv_path)
             if current_modified <= self.last_modified:
                 return True  # No changes
-            
-            new_mapping = {}
+
+            # Detect delimiter automatically
             with open(self.csv_path, 'r', newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
+                sample = csvfile.read(2048)
+                csvfile.seek(0)
+                sniffer = csv.Sniffer()
+                try:
+                    dialect = sniffer.sniff(sample, delimiters=',\t;')
+                except csv.Error:
+                    dialect = csv.get_dialect('excel')
+
+                reader = csv.DictReader(csvfile, dialect=dialect)
+                headers = [h.strip() for h in reader.fieldnames] if reader.fieldnames else []
+
+                # Determine which columns to use
+                id_field = None
+                eid_field = None
+
+                # Priority 1: Expected names
+                for possible in ('Animal_ID', 'EART'):
+                    if possible in headers:
+                        id_field = possible
+                        break
+                if 'EID' in headers:
+                    eid_field = 'EID'
+
+                # Priority 2: Fallback to first/second columns
+                if not id_field and len(headers) >= 1:
+                    id_field = headers[0]
+                if not eid_field and len(headers) >= 2:
+                    eid_field = headers[1]
+
+                if not id_field or not eid_field:
+                    self.logger.error("CSV does not contain enough columns to load mapping")
+                    return False
+
+                # Read and populate mapping
+                new_mapping = {}
                 for row in reader:
-                    animal_id = row.get('Animal_ID', '').strip()
-                    eid = row.get('EID', '').strip()
+                    animal_id = (row.get(id_field) or '').strip()
+                    eid = (row.get(eid_field) or '').strip()
                     if animal_id and eid:
                         new_mapping[animal_id] = eid
-            
+
             with self.lock:
                 self.mapping = new_mapping
                 self.last_modified = current_modified
-            
+
             self.logger.info(f"Loaded {len(new_mapping)} ID mappings from {self.csv_path}")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error loading ID mapping: {e}")
             return False
+
     
     def get_eid(self, animal_id: str) -> Optional[str]:
         """Get EID for given animal ID"""

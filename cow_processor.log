@@ -3,3 +3,19 @@
 2025-08-12 23:37:56,932 - __main__ - INFO - Loaded 10 ID mappings from D:/Personal/Tour/cow-data-processor/scripts/id_to_eid_mapping.csv
 2025-08-12 23:37:56,932 - __main__ - INFO - Log file rotation detected, resetting position
 2025-08-12 23:37:57,010 - __main__ - INFO - Parsed 1431 new entries from log file
+2025-08-12 23:40:00,448 - __main__ - INFO - STATUS - Queue: 100/100, Mappings: 10, Processed today: 0, Errors today: 0, Uptime: 0:02:08.532029
+2025-08-13 00:11:34,885 - __main__ - INFO - Starting Cow Data Processing System
+2025-08-13 00:11:39,899 - __main__ - WARNING - RevPi connection test failed - will retry during operation
+2025-08-13 00:11:39,940 - __main__ - INFO - Loaded 0 ID mappings from C:\Users\Digital Zone\Downloads\map.csv
+2025-08-13 00:11:39,950 - __main__ - INFO - Log file rotation detected, resetting position
+2025-08-13 00:11:40,026 - __main__ - INFO - Parsed 1431 new entries from log file
+2025-08-13 00:11:49,300 - __main__ - INFO - Stopping Cow Data Processing System
+2025-08-13 00:11:49,531 - __main__ - INFO - Stopping Cow Data Processing System
+2025-08-13 00:11:52,084 - __main__ - INFO - Stopping Cow Data Processing System
+2025-08-13 00:19:22,205 - __main__ - INFO - Starting Cow Data Processing System
+2025-08-13 00:19:27,208 - __main__ - WARNING - RevPi connection test failed - will retry during operation
+2025-08-13 00:19:27,241 - __main__ - INFO - Loaded 14922 ID mappings from C:\Users\Digital Zone\Downloads\map.csv
+2025-08-13 00:19:27,250 - __main__ - INFO - Log file rotation detected, resetting position
+2025-08-13 00:19:27,340 - __main__ - INFO - Parsed 1431 new entries from log file
+2025-08-13 00:19:30,290 - __main__ - INFO - Stopping Cow Data Processing System
+2025-08-13 00:19:30,346 - __main__ - INFO - Stopping Cow Data Processing System
