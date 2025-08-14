@@ -8,7 +8,7 @@ import csv
 
 # Paths
 LOG_PATH = r'C:\Program Files\Afimilk\Logs\RTC\MILKINGPARLOR\RTC_MILKINGPARLOR.log'
-CSV_PATH = r'C:\Users\Digital Zone\Downloads\map.csv'  # <-- Update to your file
+CSV_PATH = r'D:\Study\Freelancing\Gary\cow-processor-log\map.csv'
 
 def is_admin():
     """Check if script is running as administrator"""
@@ -54,7 +54,7 @@ def append_log_entry(animals):
     entry = (
         f"{timestamp},......Thread,1002,Information,"
         f"\"RotaryAuto:Forward rotation processing starts. "
-        f"Stall: {stall}, Stall Tag: 0, Animal Tag {animal_tag}, "
+        f"Stall: {stall}, Stall Tag: 0, Animal {animal_tag}, "
         f"Stall time: 00:00:04.6000000 sec\"\n"
     )
 
