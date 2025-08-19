@@ -46,22 +46,28 @@ def load_csv_animals(csv_path):
                 animals.append(animal_id)
     return animals
 
-def append_log_entry(animals):
-    stall = f"ST{random.randint(1, 100):03d}"
-    animal_tag = random.choice(animals)  # pick from CSV
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+def append_log_entries(animals, count=3):
+    """Append multiple log entries at once"""
+    entries = []
+    for _ in range(count):
+        stall = f"ST{random.randint(1, 100):03d}"
+        animal_tag = random.choice(animals)  # pick from CSV
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-    entry = (
-        f"{timestamp},......Thread,1002,Information,"
-        f"\"RotaryAuto:Forward rotation processing starts. "
-        f"Stall: {stall}, Stall Tag: 0, Animal {animal_tag}, "
-        f"Stall time: 00:00:04.6000000 sec\"\n"
-    )
+        entry = (
+            f"{timestamp},......Thread,1002,Information,"
+            f"\"RotaryAuto:Forward rotation processing complete. "
+            f"Stall: {stall}, Stall Tag: 0, Animal {animal_tag}, "
+            f"Stall time: 00:00:04.6000000 sec\"\n"
+        )
+        entries.append(entry)
 
     with open(LOG_PATH, 'a') as f:
-        f.write(entry)
+        f.writelines(entries)
 
-    print(f"✅ Written to real log: {stall} - {animal_tag}")
+    for e in entries:
+        print(f"✅ Written to real log: {e.strip()}")
+
 
 if __name__ == "__main__":
     if not is_admin():
@@ -76,8 +82,9 @@ if __name__ == "__main__":
     print(f"📄 Writing directly to: {LOG_PATH}")
     while True:
         try:
-            append_log_entry(animals)
+            append_log_entries(animals, count=3)  # write 3 entries each cycle
         except PermissionError as e:
             print(f"❌ Still no permission: {e}")
             break
         time.sleep(5)
+

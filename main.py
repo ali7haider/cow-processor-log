@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Cow Data Processing System
+Milking Parlor Animal ID Processing System
 PC to RevPi Data Bridge
 
-Monitors Afimilk log files, processes cow data through circular queue,
-cross-references IDs to EIDs, and transmits to RevPi for Bluetooth relay.
+Monitors milking parlor log files, processes cow data through circular queue,
+cross-references IDs to EIDs, and sends to RevPi for Bluetooth transmission.
 
 Author: Industrial Data Systems
 Version: 1.0.0
@@ -44,7 +44,7 @@ class CowDataEntry:
             'animal_tag': self.animal_tag,
             'eid': self.eid,
             'position': self.position,
-            'timestamp': self.timestamp.isoformat(),
+            'timestamp': self.timestamp.isoformat().replace(',', '.'),
             'processed': self.processed
         }
 
@@ -110,7 +110,7 @@ class IDMapping:
         """Load ID to EID mapping from CSV file, auto-detecting header and delimiter"""
         try:
             if not os.path.exists(self.csv_path):
-                self.logger.error(f"Mapping CSV file not found: {self.csv_path}")
+                self.logger.error(f"EID Map CSV file not found: {self.csv_path}")
                 return False
 
             current_modified = os.path.getmtime(self.csv_path)
@@ -149,7 +149,7 @@ class IDMapping:
                     eid_field = headers[1]
 
                 if not id_field or not eid_field:
-                    self.logger.error("CSV does not contain enough columns to load mapping")
+                    self.logger.error("EID Map CSV does not contain enough columns to map EIDs")
                     return False
 
                 # Read and populate mapping
@@ -164,11 +164,11 @@ class IDMapping:
                 self.mapping = new_mapping
                 self.last_modified = current_modified
 
-            self.logger.info(f"Loaded {len(new_mapping)} ID mappings from {self.csv_path}")
+            self.logger.info(f"Mapped {len(new_mapping)} EIDs from {self.csv_path}")
             return True
 
         except Exception as e:
-            self.logger.error(f"Error loading ID mapping: {e}")
+            self.logger.error(f"Error mapping EIDs: {e}")
             return False
 
     
@@ -183,7 +183,7 @@ class IDMapping:
             return len(self.mapping)
 
 class LogFileMonitor:
-    """Monitors and parses Afimilk log files"""
+    """Monitors and parses milking parlor log files"""
     
     def __init__(self, log_path: str):
         self.log_path = log_path
@@ -192,11 +192,12 @@ class LogFileMonitor:
         self.logger = logging.getLogger(__name__)
         self.prev_entries = set()
 
-        # Regex pattern for extracting rotation data
         self.rotation_pattern = re.compile(
-            r'"RotaryAuto:Forward rotation processing starts\. '
-            r'Stall: (ST\d+), Stall Tag: \d+, Animal Tag (\d+),'
-        )
+    r'"RotaryAuto:(Forward|Reverse) rotation processing complete\. '
+    r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d+),'
+)
+
+
     
     def check_for_updates(self) -> List[CowDataEntry]:
         entries = []
@@ -213,7 +214,7 @@ class LogFileMonitor:
             if current_modified != self.last_modified or file_size < self.last_position:
                 self.last_position = 0
                 self.last_modified = current_modified
-                self.logger.info("Log file rotation detected, resetting position")
+                self.logger.info("Parlor position updated")
 
             # Read new data
             with open(self.log_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -235,7 +236,7 @@ class LogFileMonitor:
                 self.prev_entries = {(e.stall, e.animal_tag, e.timestamp) for e in parsed_entries}
 
                 if new_unique_entries:
-                    self.logger.info(f"Parsed {len(new_unique_entries)} unique entries from log file")
+                    self.logger.info(f"Parsed {len(new_unique_entries)} animals from log file")
                 
                 entries = new_unique_entries
 
@@ -250,7 +251,8 @@ class LogFileMonitor:
         lines = content.split('\n')
         
         for line in lines:
-            if 'RotaryAuto:Forward rotation processing starts' in line:
+            if "RotaryAuto:Forward rotation processing complete" in line or \
+           "RotaryAuto:Reverse rotation processing complete" in line:
                 entry = self._parse_rotation_line(line)
                 if entry:
                     entries.append(entry)
@@ -267,8 +269,8 @@ class LogFileMonitor:
             # Extract stall and animal tag using regex
             match = self.rotation_pattern.search(line)
             if match:
-                stall = match.group(1)
-                animal_tag = match.group(2)
+                stall = match.group(2)
+                animal_tag = match.group(3)
                 
                 return CowDataEntry(
                     stall=stall,
@@ -300,9 +302,9 @@ class CSVOutputHandler:
                     writer.writerow(['timestamp', 'stall', 'eid', 'status'])
                 self.logger.info(f"Created new CSV output file: {self.output_file}")
         except Exception as e:
-            self.logger.error(f"Error initializing CSV file: {e}")
-    
-    def send_data(self, stall: str, eid: str) -> bool:
+            self.logger.error(f"Error initializing Output CSV file: {e}")
+
+    def send_data(self, stall: str, eid: str, animal_tag: str) -> bool:
         """Write stall and EID data to CSV file"""
         try:
             with self.lock:
@@ -315,11 +317,11 @@ class CSVOutputHandler:
                         'processed'
                     ])
                 
-                self.logger.info(f"Successfully wrote data to CSV: {stall} -> {eid}")
+                self.logger.info(f"Transmitted: {stall}-{animal_tag}-{eid}")
                 return True
                 
         except Exception as e:
-            self.logger.error(f"Error writing data to CSV: {e}")
+            self.logger.error(f"Error writing data to Output CSV: {e}")
             return False
     
     def test_connection(self) -> bool:
@@ -330,7 +332,7 @@ class CSVOutputHandler:
                 pass
             return True
         except Exception as e:
-            self.logger.error(f"CSV file test failed: {e}")
+            self.logger.error(f"Output CSV file test failed: {e}")
             return False
 
 class RevPiCommunicator:
@@ -342,7 +344,7 @@ class RevPiCommunicator:
         self.timeout = timeout
         self.logger = logging.getLogger(__name__)
     
-    def send_data(self, stall: str, eid: str) -> bool:
+    def send_data(self, stall: str, eid: str,animal_tag: str) -> bool:
         """Send stall and EID data to RevPi"""
         try:
             data = {
@@ -361,7 +363,7 @@ class RevPiCommunicator:
                 # Wait for acknowledgment
                 response = sock.recv(1024).decode('utf-8').strip()
                 if response == 'OK':
-                    self.logger.info(f"Successfully sent data to RevPi: {stall} -> {eid}")
+                    self.logger.info(f"Successfully sent data to RevPi: {stall} -> {eid} with Animal Tag {animal_tag}")
                     return True
                 else:
                     self.logger.error(f"Unexpected response from RevPi: {response}")
@@ -391,9 +393,9 @@ class CowDataProcessor:
         self.logger = logging.getLogger(__name__)
 
         # Initialize components
-        self.queue = CircularQueue(self.config.getint('processing', 'queue_size', fallback=100))
-        self.id_mapping = IDMapping(self.config.get('files', 'id_mapping_csv'))
-        self.log_monitor = LogFileMonitor(self.config.get('files', 'log_file_path'))
+        self.queue = CircularQueue(self.config.getint('processing', 'parlor_stalls', fallback=100))
+        self.id_mapping = IDMapping(self.config.get('files', 'eid_map_csv'))
+        self.log_monitor = LogFileMonitor(self.config.get('files', 'parlor_log'))
         self.output_mode = self.config.get('output', 'mode', fallback='revpi').lower()
         
         if self.output_mode == 'csv':
@@ -423,12 +425,12 @@ class CowDataProcessor:
         # Default configuration
         config.read_dict({
             'files': {
-                'log_file_path': r'C:\Program Files\Afimilk\Logs\RTC\MILKINGPARLOR\RTC_MILKINGPARLOR.log',
-                'id_mapping_csv': 'id_mapping.csv'
+                'parlor_log': r'C:\Program Files\Afimilk\Logs\RTC\MILKINGPARLOR\RTC_MILKINGPARLOR.log',
+                'eid_map_csv': 'id_mapping.csv'
             },
             'processing': {
-                'check_interval': '3',
-                'queue_size': '100',
+                'parlor_interval': '3',
+                'parlor_stalls': '100',
                 'transmission_offset': '60'
             },
             'network': {
@@ -454,37 +456,52 @@ class CowDataProcessor:
         return config
     
     def setup_logging(self):
-        """Setup logging configuration"""
+        """Setup logging configuration with dot-separated milliseconds"""
+
+        import logging
+        from logging.handlers import RotatingFileHandler
+        from datetime import datetime
+
+        class DotMillisFormatter(logging.Formatter):
+            def formatTime(self, record, datefmt=None):
+                ct = datetime.fromtimestamp(record.created)
+                if datefmt:
+                    # Format without microseconds, then append milliseconds
+                    s = ct.strftime(datefmt)
+                    return s + f".{int(record.msecs):03d}"
+                else:
+                    t = ct.strftime("%Y-%m-%d %H:%M:%S")
+                    return f"{t}.{int(record.msecs):03d}"
+
         log_level = getattr(logging, self.config.get('logging', 'level', fallback='INFO'))
         log_file = self.config.get('logging', 'file', fallback='cow_processor.log')
-        
-        # Create formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+        # Formatter with only milliseconds
+        formatter = DotMillisFormatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
         )
-        
-        # Setup file handler with rotation
-        from logging.handlers import RotatingFileHandler
+
+        # File handler with rotation
         file_handler = RotatingFileHandler(
             log_file,
             maxBytes=self.config.getint('logging', 'max_size_mb', fallback=10) * 1024 * 1024,
             backupCount=self.config.getint('logging', 'backup_count', fallback=5)
         )
         file_handler.setFormatter(formatter)
-        
-        # Setup console handler
+
+        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
-        
-        # Configure root logger
+
         logging.basicConfig(
             level=log_level,
             handlers=[file_handler, console_handler]
         )
-    
+
     def start(self):
         """Start the data processing system"""
-        self.logger.info("Starting Cow Data Processing System")
+        self.logger.info("Starting Animal ID Processing System")
         self.running = True
         
         if self.output_handler.test_connection():
@@ -511,20 +528,20 @@ class CowDataProcessor:
     
     def _main_loop(self):
         """Main processing loop"""
-        check_interval = self.config.getfloat('processing', 'check_interval', fallback=3.0)
+        parlor_interval = self.config.getfloat('processing', 'parlor_interval', fallback=3.0)
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
         
         last_mapping_check = 0
-        mapping_check_interval = 60*60  # Check mapping file every hour
+        mapping_parlor_interval = 60*60  # Check mapping file every hour
 
         while self.running:
             try:
                 # Check for ID mapping updates
                 current_time = time.time()
-                if current_time - last_mapping_check > mapping_check_interval:
+                if current_time - last_mapping_check > mapping_parlor_interval:
                     self.id_mapping.load_mapping()
                     last_mapping_check = current_time
-                    self.logger.info(f"Checking for ID mapping updates every {mapping_check_interval / 60:.0f} minutes...")
+                    self.logger.info(f"Checking for EID Map CSV file updates every {mapping_parlor_interval / 60:.0f} minutes...")
 
                 
                 # Check for new log entries
@@ -540,19 +557,21 @@ class CowDataProcessor:
 
                     if entry.eid:
                         self.logger.info(
-                            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] New Animal: "
+                            f"New Animal: "
                             f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
                         )
                     else:
                         self.logger.info(
-                            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] New Animal: "
+                            f"New Animal: "
                             f"{entry.stall}-{entry.animal_tag}-NO_EID"
         )
                 
                 # Check for entries ready for transmission
                 entry_to_transmit = self.queue.get_by_offset(transmission_offset)
-                if entry_to_transmit and not entry_to_transmit.processed and entry_to_transmit.eid:
-                    success = self.output_handler.send_data(entry_to_transmit.stall, entry_to_transmit.eid)
+                if entry_to_transmit and not entry_to_transmit.processed:
+                    eid_to_send = entry_to_transmit.eid if entry_to_transmit.eid else "0"
+
+                    success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send,entry_to_transmit.animal_tag)
                     if success:
                         self.queue.mark_processed(entry_to_transmit.position)
                         self.stats['processed_today'] += 1
@@ -564,12 +583,12 @@ class CowDataProcessor:
                 if int(current_time) % 300 == 0:  # Every 5 minutes
                     self._log_status()
                 
-                time.sleep(check_interval)
+                time.sleep(parlor_interval)
                 
             except Exception as e:
                 self.logger.error(f"Error in main loop iteration: {e}")
                 self.stats['errors_today'] += 1
-                time.sleep(check_interval)
+                time.sleep(parlor_interval)
     
     def _log_status(self):
         """Log current system status"""
@@ -617,4 +636,4 @@ def main():
     processor.start()
     
 if __name__ == "__main__":
-    main()
+    main()#!/usr/bin/env python3

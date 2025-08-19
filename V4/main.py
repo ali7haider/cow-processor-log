@@ -193,7 +193,7 @@ class LogFileMonitor:
         self.prev_entries = set()
 
         self.rotation_pattern = re.compile(
-    r'"RotaryAuto:(?:Forward|Reverse) rotation processing starts\. '
+    r'"RotaryAuto:(Forward|Reverse) rotation processing starts\. '
     r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d+),'
 )
 
@@ -246,42 +246,18 @@ class LogFileMonitor:
         return entries
     
     def _parse_log_content(self, content: str) -> List[CowDataEntry]:
-        """Parse log content for rotation events (forward + reverse)"""
+        """Parse log content for rotation events"""
         entries = []
         lines = content.split('\n')
         
         for line in lines:
-            if 'RotaryAuto:Forward rotation processing starts' in line or \
-            'RotaryAuto:Reverse rotation processing starts' in line:
+            if "RotaryAuto:Forward rotation processing starts" in line or \
+           "RotaryAuto:Reverse rotation processing starts" in line:
                 entry = self._parse_rotation_line(line)
                 if entry:
                     entries.append(entry)
-
-        # Sort by stall number for gap detection
-        entries.sort(key=lambda e: int(e.stall.replace("ST", "")))
-
-        # Detect missing stalls and insert placeholders
-        filled_entries = []
-        for i in range(len(entries)):
-            filled_entries.append(entries[i])
-            if i < len(entries) - 1:
-                current_num = int(entries[i].stall.replace("ST", ""))
-                next_num = int(entries[i+1].stall.replace("ST", ""))
-                gap = next_num - current_num
-                if gap > 1:
-                    for missing in range(current_num + 1, next_num):
-                        filled_entries.append(
-                            CowDataEntry(
-                                stall=f"ST{missing:03}",
-                                animal_tag="0",
-                                eid=None,
-                                position=0,
-                                timestamp=datetime.now()
-                            )
-                        )
-
-        return filled_entries
-
+        
+        return entries
     
     def _parse_rotation_line(self, line: str) -> Optional[CowDataEntry]:
         """Parse individual rotation log line"""
@@ -290,20 +266,18 @@ class LogFileMonitor:
             timestamp_str = line.split(',')[0]
             timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
             
-            # Extract direction, stall, and animal tag using regex
+            # Extract stall and animal tag using regex
             match = self.rotation_pattern.search(line)
             if match:
-                direction = match.group(1)  # "Forward" or "Reverse"
                 stall = match.group(2)
                 animal_tag = match.group(3)
                 
                 return CowDataEntry(
                     stall=stall,
                     animal_tag=animal_tag,
-                    eid=None,   # Will be filled later via mapping
-                    position=0, # Will be set by queue
-                    timestamp=timestamp,
-                    direction=direction  # <-- Add this to CowDataEntry dataclass
+                    eid=None,  # Will be filled later via mapping
+                    position=0,  # Will be set by queue
+                    timestamp=timestamp
                 )
         
         except Exception as e:

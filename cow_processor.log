@@ -1,0 +1,40 @@
+2025-08-14 13:11:33,458 - __main__ - INFO - Using RevPi output mode
+2025-08-14 13:11:33,458 - __main__ - INFO - Starting Animal ID Processing System
+2025-08-14 13:11:38,466 - __main__ - WARNING - REVPI connection test failed - will retry during operation
+2025-08-14 13:11:38,466 - __main__ - ERROR - EID Map CSV file not found: id_mapping.csv
+2025-08-14 13:11:38,466 - __main__ - ERROR - EID Map CSV file not found: id_mapping.csv
+2025-08-14 13:11:38,466 - __main__ - INFO - Checking for EID Map CSV file updates every 60 minutes...
+2025-08-14 13:11:38,466 - __main__ - INFO - Parlor position updated
+2025-08-14 13:11:38,544 - __main__ - INFO - Parsed 20 animals from log file
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST041-136452-NO_EID
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST001-133818-NO_EID
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST071-127586-NO_EID
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST006-127856-NO_EID
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST001-110510-NO_EID
+2025-08-14 13:11:38,544 - __main__ - INFO - New Animal: ST049-129135-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST061-133569-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST013-127403-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST045-128055-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST035-120269-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST048-122930-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST092-136016-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST035-125164-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST044-137886-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST066-130519-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST048-123934-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST010-935333-NO_EID
+2025-08-14 13:11:38,560 - __main__ - INFO - New Animal: ST080-127038-NO_EID
+2025-08-14 13:11:38,575 - __main__ - INFO - New Animal: ST046-138160-NO_EID
+2025-08-14 13:11:38,575 - __main__ - INFO - New Animal: ST094-138356-NO_EID
+2025-08-14 13:11:41,576 - __main__ - INFO - Parlor position updated
+2025-08-14 13:11:41,638 - __main__ - INFO - Parsed 1 animals from log file
+2025-08-14 13:11:41,638 - __main__ - INFO - New Animal: ST017-127663-NO_EID
+2025-08-14 13:11:47,654 - __main__ - INFO - Parlor position updated
+2025-08-14 13:11:47,700 - __main__ - INFO - Parsed 1 animals from log file
+2025-08-14 13:11:47,716 - __main__ - INFO - New Animal: ST034-122831-NO_EID
+2025-08-14 13:11:50,716 - __main__ - INFO - Parlor position updated
+2025-08-14 13:11:50,778 - __main__ - INFO - Parsed 1 animals from log file
+2025-08-14 13:11:50,778 - __main__ - INFO - New Animal: ST022-132643-NO_EID
+2025-08-14 13:11:56,789 - __main__ - INFO - Parlor position updated
+2025-08-14 13:11:56,868 - __main__ - INFO - Parsed 1 animals from log file
+2025-08-14 13:11:56,868 - __main__ - INFO - New Animal: ST056-132208-NO_EID

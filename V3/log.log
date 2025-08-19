@@ -4791,17 +4791,3 @@
 2025-08-14 00:33:31,719 - __main__ - INFO - Parlor position updated
 2025-08-14 00:33:37,762 - __main__ - INFO - Parlor position updated
 2025-08-14 00:33:40,805 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:31,080 - __main__ - INFO - Using CSV output mode
-2025-08-14 12:54:31,080 - __main__ - INFO - Starting Animal ID Processing System
-2025-08-14 12:54:31,096 - __main__ - INFO - CSV connection test successful
-2025-08-14 12:54:31,096 - __main__ - ERROR - EID Map CSV file not found: C:\Users\Madero\AppData\Local\DairyThis\V3\map.csv
-2025-08-14 12:54:31,096 - __main__ - ERROR - EID Map CSV file not found: C:\Users\Madero\AppData\Local\DairyThis\V3\map.csv
-2025-08-14 12:54:31,096 - __main__ - INFO - Checking for EID Map CSV file updates every 60 minutes...
-2025-08-14 12:54:31,096 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:34,219 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:37,319 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:43,405 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:46,493 - __main__ - INFO - Parlor position updated
-2025-08-14 12:54:48,074 - __main__ - INFO - Stopping Cow Data Processing System
-2025-08-14 12:54:48,324 - __main__ - INFO - Stopping Cow Data Processing System
-2025-08-14 12:54:49,605 - __main__ - INFO - Stopping Cow Data Processing System
