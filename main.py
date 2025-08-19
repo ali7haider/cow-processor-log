@@ -194,8 +194,9 @@ class LogFileMonitor:
 
         self.rotation_pattern = re.compile(
     r'"RotaryAuto:(Forward|Reverse) rotation processing complete\. '
-    r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d+),'
+    r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d*),'
 )
+
 
 
     
@@ -271,7 +272,8 @@ class LogFileMonitor:
             if match:
                 stall = match.group(2)
                 animal_tag = match.group(3)
-                
+                if not animal_id:  # empty string
+                    animal_id = "0"
                 return CowDataEntry(
                     stall=stall,
                     animal_tag=animal_tag,
