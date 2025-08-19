@@ -430,6 +430,7 @@ class CowDataProcessor:
             )
             self.logger.info("Using RevPi output mode")
 
+        self.last_transmission_time = 0
 
         self.stats = {
             'processed_today': 0,
@@ -451,11 +452,16 @@ class CowDataProcessor:
             'processing': {
                 'parlor_interval': '3',
                 'parlor_stalls': '100',
-                'transmission_offset': '60'
+                'transmission_offset': '60',
+                'output_delay': '2'  # Added output delay configuration (seconds)
             },
             'network': {
                 'revpi_host': '192.168.1.100',
                 'revpi_port': '8080'
+            },
+            'output': {
+                'mode': 'revpi',
+                'csv_file': 'cow_data_output.csv'
             },
             'logging': {
                 'level': 'INFO',
@@ -550,6 +556,7 @@ class CowDataProcessor:
         """Main processing loop"""
         parlor_interval = self.config.getfloat('processing', 'parlor_interval', fallback=3.0)
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
+        output_delay = self.config.getfloat('processing', 'output_delay', fallback=2.0)
         
         last_mapping_check = 0
         last_status_log = 0
@@ -591,8 +598,11 @@ class CowDataProcessor:
                             f"{entry.stall.replace('ST', '')}-{entry.animal_tag}-NO_EID"
                         )
                 
+                # Check if enough time has passed since last transmission
+                time_since_last_transmission = current_time - self.last_transmission_time
+                
                 entry_to_transmit = self.queue.get_ready_for_transmission(transmission_offset)
-                if entry_to_transmit:
+                if entry_to_transmit and time_since_last_transmission >= output_delay:
                     eid_to_send = entry_to_transmit.eid if entry_to_transmit.eid else "0"
 
                     success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send, entry_to_transmit.animal_tag)
@@ -600,6 +610,8 @@ class CowDataProcessor:
                         self.queue.mark_processed(entry_to_transmit.position)
                         self.stats['processed_today'] += 1
                         self.stats['last_transmission'] = datetime.now()
+                        # Added last transmission time for delay tracking
+                        self.last_transmission_time = current_time
                         
                         self.logger.info(
                             f"Transmit: "
@@ -607,6 +619,10 @@ class CowDataProcessor:
                         )
                     else:
                         self.stats['errors_today'] += 1
+                elif entry_to_transmit and time_since_last_transmission < output_delay:
+                    # Added log when transmission is delayed
+                    remaining_delay = output_delay - time_since_last_transmission
+                    self.logger.debug(f"Delaying transmission for {remaining_delay:.1f}s to prevent overwhelming output")
                 
                 if current_time - last_status_log >= 30:  # Every 30 seconds
                     queue_status = self.queue.get_status()
