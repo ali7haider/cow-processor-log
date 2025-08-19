@@ -64,8 +64,24 @@ class CircularQueue:
             self.position_counter += 1
             self.queue.append(entry)
     
+    def get_ready_for_transmission(self, offset: int) -> Optional[CowDataEntry]:
+        """Get oldest unprocessed entry that's ready for transmission"""
+        with self.lock:
+            if not self.queue:
+                return None
+            
+            # Find the oldest unprocessed entry that meets the offset requirement
+            current_position = self.position_counter
+            for entry in self.queue:
+                # Check if entry is old enough (offset positions have passed)
+                if (not entry.processed and 
+                    current_position - entry.position >= offset):
+                    return entry
+            
+            return None
+    
     def get_by_offset(self, offset: int) -> Optional[CowDataEntry]:
-        """Get entry by position offset (newest - offset)"""
+        """Get entry by position offset (newest - offset) - kept for compatibility"""
         with self.lock:
             if len(self.queue) <= offset:
                 return None
@@ -89,11 +105,14 @@ class CircularQueue:
     def get_status(self) -> dict:
         """Get queue status"""
         with self.lock:
+            unprocessed_count = sum(1 for entry in self.queue if not entry.processed)
             return {
                 'size': len(self.queue),
                 'max_size': self.max_size,
                 'current_position': self.position_counter,
-                'processed_count': sum(1 for entry in self.queue if entry.processed)
+                'processed_count': sum(1 for entry in self.queue if entry.processed),
+                'unprocessed_count': unprocessed_count,
+                'fill_percentage': round((len(self.queue) / self.max_size) * 100, 1)
             }
 
 class IDMapping:
@@ -197,8 +216,6 @@ class LogFileMonitor:
     r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d*),'
 )
 
-
-
     
     def check_for_updates(self) -> List[CowDataEntry]:
         entries = []
@@ -272,8 +289,8 @@ class LogFileMonitor:
             if match:
                 stall = match.group(2)
                 animal_tag = match.group(3)
-                if not animal_id:  # empty string
-                    animal_id = "0"
+                if not animal_tag:  # empty string
+                    animal_tag = "0"
                 return CowDataEntry(
                     stall=stall,
                     animal_tag=animal_tag,
@@ -286,6 +303,7 @@ class LogFileMonitor:
             self.logger.debug(f"Error parsing log line: {e}")
         
         return None
+
 class CSVOutputHandler:
     """Handles CSV file output as alternative to RevPi communication"""
     
@@ -346,7 +364,7 @@ class RevPiCommunicator:
         self.timeout = timeout
         self.logger = logging.getLogger(__name__)
     
-    def send_data(self, stall: str, eid: str,animal_tag: str) -> bool:
+    def send_data(self, stall: str, eid: str, animal_tag: str) -> bool:
         """Send stall and EID data to RevPi"""
         try:
             data = {
@@ -534,16 +552,18 @@ class CowDataProcessor:
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
         
         last_mapping_check = 0
+        last_status_log = 0
         mapping_parlor_interval = 60*60  # Check mapping file every hour
 
         while self.running:
             try:
-                # Check for ID mapping updates
                 current_time = time.time()
+                
+                # Check for ID mapping updates
                 if current_time - last_mapping_check > mapping_parlor_interval:
                     self.id_mapping.load_mapping()
                     last_mapping_check = current_time
-                    self.logger.info(f"Checking for EID Map CSV file updates every {mapping_parlor_interval / 60:.0f} minutes...")
+                    self.logger.debug(f"Checking for EID Map CSV file updates every {mapping_parlor_interval / 60:.0f} minutes...")
 
                 
                 # Check for new log entries
@@ -556,34 +576,45 @@ class CowDataProcessor:
                     
                     # Add to queue
                     self.queue.add(entry)
+                    
+                    queue_status = self.queue.get_status()
+                    self.logger.info(f"Position: {entry.position}")
 
                     if entry.eid:
                         self.logger.info(
                             f"New Animal: "
-                            f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
+                            f"{entry.stall.replace('ST', '')}-{entry.animal_tag}-{entry.eid}"
                         )
                     else:
                         self.logger.info(
                             f"New Animal: "
-                            f"{entry.stall}-{entry.animal_tag}-NO_EID"
-        )
+                            f"{entry.stall.replace('ST', '')}-{entry.animal_tag}-NO_EID"
+                        )
                 
-                # Check for entries ready for transmission
-                entry_to_transmit = self.queue.get_by_offset(transmission_offset)
-                if entry_to_transmit and not entry_to_transmit.processed:
+                entry_to_transmit = self.queue.get_ready_for_transmission(transmission_offset)
+                if entry_to_transmit:
                     eid_to_send = entry_to_transmit.eid if entry_to_transmit.eid else "0"
 
-                    success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send,entry_to_transmit.animal_tag)
+                    success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send, entry_to_transmit.animal_tag)
                     if success:
                         self.queue.mark_processed(entry_to_transmit.position)
                         self.stats['processed_today'] += 1
                         self.stats['last_transmission'] = datetime.now()
+                        
+                        self.logger.info(
+                            f"Transmit: "
+                            f"{entry_to_transmit.stall.replace('ST', '')}-{entry_to_transmit.position}-{eid_to_send}"
+                        )
                     else:
                         self.stats['errors_today'] += 1
                 
-                # Log periodic status
-                if int(current_time) % 300 == 0:  # Every 5 minutes
-                    self._log_status()
+                if current_time - last_status_log >= 30:  # Every 30 seconds
+                    queue_status = self.queue.get_status()
+                    self.logger.info(
+                        f"Queue: {queue_status['size']}/{queue_status['max_size']} "
+                        f"({queue_status['fill_percentage']}% full)"
+                    )
+                    last_status_log = current_time
                 
                 time.sleep(parlor_interval)
                 
@@ -591,6 +622,7 @@ class CowDataProcessor:
                 self.logger.error(f"Error in main loop iteration: {e}")
                 self.stats['errors_today'] += 1
                 time.sleep(parlor_interval)
+
     
     def _log_status(self):
         """Log current system status"""
@@ -638,4 +670,4 @@ def main():
     processor.start()
     
 if __name__ == "__main__":
-    main()#!/usr/bin/env python3
+    main()
