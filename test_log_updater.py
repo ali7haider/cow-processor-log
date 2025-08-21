@@ -57,7 +57,7 @@ def append_log_entries(animals, count=3):
         entry = (
             f"{timestamp},......Thread,1002,Information,"
             f"\"RotaryAuto:Forward rotation processing complete. "
-            f"Stall: {stall}, Stall Tag: 0, Animal {animal_tag}, "
+            f"Stall: {stall}, Stall Tag: 0, Animal , "
             f"Stall time: 00:00:04.6000000 sec\"\n"
         )
         entries.append(entry)
