@@ -194,9 +194,8 @@ class LogFileMonitor:
 
         self.rotation_pattern = re.compile(
     r'"RotaryAuto:(Forward|Reverse) rotation processing complete\. '
-    r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d*),'
+    r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d+),'
 )
-
 
 
     
@@ -272,8 +271,7 @@ class LogFileMonitor:
             if match:
                 stall = match.group(2)
                 animal_tag = match.group(3)
-                if not animal_id:  # empty string
-                    animal_id = "0"
+                
                 return CowDataEntry(
                     stall=stall,
                     animal_tag=animal_tag,
@@ -412,7 +410,7 @@ class CowDataProcessor:
             )
             self.logger.info("Using RevPi output mode")
 
-        self.last_transmission_time = 0
+
         self.stats = {
             'processed_today': 0,
             'errors_today': 0,
@@ -433,8 +431,7 @@ class CowDataProcessor:
             'processing': {
                 'parlor_interval': '3',
                 'parlor_stalls': '100',
-                'transmission_offset': '60',
-                'output_delay': '0.5'  
+                'transmission_offset': '60'
             },
             'network': {
                 'revpi_host': '192.168.1.100',
@@ -533,8 +530,7 @@ class CowDataProcessor:
         """Main processing loop"""
         parlor_interval = self.config.getfloat('processing', 'parlor_interval', fallback=3.0)
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
-        output_delay = self.config.getfloat('processing', 'output_delay', fallback=2.0)
-
+        
         last_mapping_check = 0
         mapping_parlor_interval = 60*60  # Check mapping file every hour
 
@@ -569,10 +565,10 @@ class CowDataProcessor:
                             f"New Animal: "
                             f"{entry.stall}-{entry.animal_tag}-NO_EID"
         )
-                time_since_last_transmission = current_time - self.last_transmission_time
+                
                 # Check for entries ready for transmission
                 entry_to_transmit = self.queue.get_by_offset(transmission_offset)
-                if entry_to_transmit and time_since_last_transmission >= output_delay:
+                if entry_to_transmit and not entry_to_transmit.processed:
                     eid_to_send = entry_to_transmit.eid if entry_to_transmit.eid else "0"
 
                     success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send,entry_to_transmit.animal_tag)
@@ -582,10 +578,6 @@ class CowDataProcessor:
                         self.stats['last_transmission'] = datetime.now()
                     else:
                         self.stats['errors_today'] += 1
-                elif entry_to_transmit and time_since_last_transmission < output_delay:
-                    # Added log when transmission is delayed
-                    remaining_delay = output_delay - time_since_last_transmission
-                    self.logger.debug(f"Delaying transmission for {remaining_delay:.1f}s to prevent overwhelming output")
                 
                 # Log periodic status
                 if int(current_time) % 300 == 0:  # Every 5 minutes
