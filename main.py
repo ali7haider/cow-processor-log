@@ -393,7 +393,7 @@ class CowDataProcessor:
         self.running = False
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
-
+        self.last_sent_stall = -1
         # Initialize components
         self.queue = CircularQueue(self.config.getint('processing', 'parlor_stalls', fallback=100))
         self.id_mapping = IDMapping(self.config.get('files', 'eid_map_csv'))
@@ -569,17 +569,53 @@ class CowDataProcessor:
         )
                 
                 # Check for entries ready for transmission
-                entry_to_transmit = self.queue.get_by_offset(transmission_offset)
-                if entry_to_transmit and not entry_to_transmit.processed:
-                    eid_to_send = entry_to_transmit.eid if entry_to_transmit.eid else "0"
+                # Sequential catch-up transmission
+                # Check for entries ready for transmission
+                target_entry = self.queue.get_by_offset(transmission_offset)
 
-                    success = self.output_handler.send_data(entry_to_transmit.stall, eid_to_send,entry_to_transmit.animal_tag)
-                    if success:
-                        self.queue.mark_processed(entry_to_transmit.position)
-                        self.stats['processed_today'] += 1
-                        self.stats['last_transmission'] = datetime.now()
-                    else:
-                        self.stats['errors_today'] += 1
+                if target_entry:
+                    # Find target stall index (1..parlor_stalls)
+                    target_stall_index = int(target_entry.stall.replace("ST", ""))
+
+                    # Transmit everything from last_sent_stall+1 up to target_stall_index
+                    for stall_num in range(self.last_sent_stall + 1, target_stall_index + 1):
+                        stall_name = f"ST{stall_num:03d}"
+                        candidate = next(
+                            (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
+                            None
+                        )
+
+                        if candidate:
+                            # Normal case: send actual data
+                            eid_to_send = candidate.eid if candidate.eid else "0"
+                            success = self.output_handler.send_data(candidate.stall, eid_to_send, candidate.animal_tag)
+
+                            if success:
+                                self.queue.mark_processed(candidate.position)
+                                self.stats['processed_today'] += 1
+                                self.stats['last_transmission'] = datetime.now()
+                                self.last_sent_stall = stall_num
+                                time.sleep(0.5)  # 500ms delay
+                            else:
+                                self.stats['errors_today'] += 1
+                                break  # stop here and retry in next loop
+
+                        else:
+                            # Stall missing in logs → send placeholder
+                            if stall_name=='ST000':
+                                continue
+                            success = self.output_handler.send_data(stall_name, "0", "0")
+                            if success:
+                                self.stats['processed_today'] += 1
+                                self.stats['last_transmission'] = datetime.now()
+                                self.last_sent_stall = stall_num
+                                time.sleep(0.5)  # 500ms delay
+                            else:
+                                self.stats['errors_today'] += 1
+                                break
+
+
+
                 
                 # Log periodic status
                 if int(current_time) % 300 == 0:  # Every 5 minutes

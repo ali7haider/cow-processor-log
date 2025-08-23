@@ -46,18 +46,28 @@ def load_csv_animals(csv_path):
                 animals.append(animal_id)
     return animals
 
+_stall_counter = 28  # global counter or class variable
+
 def append_log_entries(animals, count=3):
-    """Append multiple log entries at once"""
+    """Append multiple log entries at once with sequential Stall IDs that wrap at 114"""
+    global _stall_counter
     entries = []
+
     for _ in range(count):
-        stall = f"ST{random.randint(1, 100):03d}"
+        stall = f"ST{_stall_counter:03d}"  # zero-padded 3 digits (ST001...ST114)
+        _stall_counter += 1
+
+        # wrap back to 1 if we exceed 114
+        if _stall_counter > 114:
+            _stall_counter = 1
+
         animal_tag = random.choice(animals)  # pick from CSV
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
         entry = (
             f"{timestamp},......Thread,1002,Information,"
             f"\"RotaryAuto:Forward rotation processing complete. "
-            f"Stall: {stall}, Stall Tag: 0, Animal , "
+            f"Stall: {stall}, Stall Tag: 0, Animal {animal_tag}, "
             f"Stall time: 00:00:04.6000000 sec\"\n"
         )
         entries.append(entry)
@@ -67,6 +77,8 @@ def append_log_entries(animals, count=3):
 
     for e in entries:
         print(f"✅ Written to real log: {e.strip()}")
+
+
 
 
 if __name__ == "__main__":
@@ -82,7 +94,7 @@ if __name__ == "__main__":
     print(f"📄 Writing directly to: {LOG_PATH}")
     while True:
         try:
-            append_log_entries(animals, count=3)  # write 3 entries each cycle
+            append_log_entries(animals, count=2)  # write 3 entries each cycle
         except PermissionError as e:
             print(f"❌ Still no permission: {e}")
             break
