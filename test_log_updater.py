@@ -46,7 +46,7 @@ def load_csv_animals(csv_path):
                 animals.append(animal_id)
     return animals
 
-_stall_counter = 28  # global counter or class variable
+_stall_counter = 69  # global counter or class variable
 
 def append_log_entries(animals, count=3):
     """Append multiple log entries at once with sequential Stall IDs that wrap at 114"""
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     print(f"📄 Writing directly to: {LOG_PATH}")
     while True:
         try:
-            append_log_entries(animals, count=2)  # write 3 entries each cycle
+            append_log_entries(animals, count=4)  # write 3 entries each cycle
         except PermissionError as e:
             print(f"❌ Still no permission: {e}")
             break

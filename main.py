@@ -399,7 +399,7 @@ class CowDataProcessor:
         self.id_mapping = IDMapping(self.config.get('files', 'eid_map_csv'))
         self.log_monitor = LogFileMonitor(self.config.get('files', 'parlor_log'))
         self.output_mode = self.config.get('output', 'mode', fallback='revpi').lower()
-        
+
         if self.output_mode == 'csv':
             self.output_handler = CSVOutputHandler(
                 self.config.get('output', 'csv_file', fallback='cow_data_output.csv')
@@ -433,7 +433,8 @@ class CowDataProcessor:
             'processing': {
                 'parlor_interval': '3',
                 'parlor_stalls': '100',
-                'transmission_offset': '60'
+                'transmission_offset': '60',
+                'output_delay': '0.5'
             },
             'network': {
                 'revpi_host': '192.168.1.100',
@@ -528,21 +529,61 @@ class CowDataProcessor:
         self.logger.info("Stopping Cow Data Processing System")
         self.running = False
     
+    def _get_stall_transmission_sequence(self, last_sent_stall: int, target_stall: int, max_stalls: int) -> List[int]:
+        """
+        Generate sequence of stalls to transmit, handling rotary wraparound.
+        
+        Args:
+            last_sent_stall: Last stall that was transmitted (0-based, 0 means ST001 was last)
+            target_stall: Target stall number (1-based, e.g., 1 for ST001)
+            max_stalls: Maximum number of stalls in parlor (e.g., 114)
+        
+        Returns:
+            List of stall numbers to transmit (1-based)
+        """
+        sequence = []
+        
+        if last_sent_stall >= max_stalls:
+            # Reset if we've gone beyond max stalls
+            last_sent_stall = 0
+        
+        current = last_sent_stall + 1
+        
+        # Handle wraparound case
+        if target_stall < current:
+            # We need to wrap around: current -> max_stalls, then 1 -> target_stall
+            
+            # First: transmit from current to max_stalls
+            for stall_num in range(current, max_stalls + 1):
+                sequence.append(stall_num)
+            
+            # Then: transmit from 1 to target_stall
+            for stall_num in range(1, target_stall + 1):
+                sequence.append(stall_num)
+        else:
+            # Normal case: transmit from current to target_stall
+            for stall_num in range(current, target_stall + 1):
+                sequence.append(stall_num)
+        
+        return sequence
     def _main_loop(self):
         """Main processing loop"""
         parlor_interval = self.config.getfloat('processing', 'parlor_interval', fallback=3.0)
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
-        
-        last_mapping_check = 0
+        output_delay = self.config.getfloat('processing', 'output_delay', fallback=2.0)
+        max_stalls = self.config.getint('processing', 'parlor_stalls', fallback=114)  # Add this to config
+
+        self.id_mapping.load_mapping()
+        last_mapping_check = int(time.time())  # mark it so we don't reload immediately
         mapping_parlor_interval = 60*60  # Check mapping file every hour
 
         while self.running:
             try:
                 # Check for ID mapping updates
                 current_time = time.time()
-                if current_time - last_mapping_check > mapping_parlor_interval:
+                if int(current_time) % 3600 == 0 and last_mapping_check != int(current_time):
                     self.id_mapping.load_mapping()
-                    last_mapping_check = current_time
+                    last_mapping_check = int(current_time)
                     self.logger.info(f"Checking for EID Map CSV file updates every {mapping_parlor_interval / 60:.0f} minutes...")
 
                 
@@ -569,16 +610,23 @@ class CowDataProcessor:
         )
                 
                 # Check for entries ready for transmission
-                # Sequential catch-up transmission
-                # Check for entries ready for transmission
                 target_entry = self.queue.get_by_offset(transmission_offset)
 
                 if target_entry:
                     # Find target stall index (1..parlor_stalls)
                     target_stall_index = int(target_entry.stall.replace("ST", ""))
+                    
+                    # Get sequence of stalls to transmit (handles rotation)
+                    stalls_to_transmit = self._get_stall_transmission_sequence(
+                        self.last_sent_stall, 
+                        target_stall_index, 
+                        max_stalls
+                    )
+                    
+                    self.logger.info(f"Transmitting stalls: {stalls_to_transmit[0] if stalls_to_transmit else 'none'} to {stalls_to_transmit[-1] if stalls_to_transmit else 'none'}")
 
-                    # Transmit everything from last_sent_stall+1 up to target_stall_index
-                    for stall_num in range(self.last_sent_stall + 1, target_stall_index + 1):
+                    # Transmit each stall in sequence
+                    for stall_num in stalls_to_transmit:
                         stall_name = f"ST{stall_num:03d}"
                         candidate = next(
                             (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
@@ -595,25 +643,24 @@ class CowDataProcessor:
                                 self.stats['processed_today'] += 1
                                 self.stats['last_transmission'] = datetime.now()
                                 self.last_sent_stall = stall_num
-                                time.sleep(0.5)  # 500ms delay
+                                time.sleep(output_delay)
                             else:
                                 self.stats['errors_today'] += 1
                                 break  # stop here and retry in next loop
 
                         else:
                             # Stall missing in logs → send placeholder
-                            if stall_name=='ST000':
+                            if stall_name == 'ST000':
                                 continue
                             success = self.output_handler.send_data(stall_name, "0", "0")
                             if success:
                                 self.stats['processed_today'] += 1
                                 self.stats['last_transmission'] = datetime.now()
                                 self.last_sent_stall = stall_num
-                                time.sleep(0.5)  # 500ms delay
+                                time.sleep(output_delay)
                             else:
                                 self.stats['errors_today'] += 1
                                 break
-
 
 
                 
@@ -629,13 +676,14 @@ class CowDataProcessor:
                 time.sleep(parlor_interval)
     
     def _log_status(self):
-        """Log current system status"""
+        """Log current system status with rotation info"""
         queue_status = self.queue.get_status()
         mapping_count = self.id_mapping.get_mapping_count()
         uptime = datetime.now() - self.stats['start_time']
         
         self.logger.info(
             f"STATUS - Queue: {queue_status['size']}/{queue_status['max_size']}, "
+            f"Last sent stall: ST{self.last_sent_stall:03d}, "
             f"Mappings: {mapping_count}, Processed today: {self.stats['processed_today']}, "
             f"Errors today: {self.stats['errors_today']}, Uptime: {uptime}"
         )
