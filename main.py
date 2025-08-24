@@ -51,11 +51,12 @@ class CowDataEntry:
 class CircularQueue:
     """Thread-safe circular queue implementation"""
     
-    def __init__(self, max_size: int = 100):
+    def __init__(self, max_size: int = 1000):
         self.max_size = max_size
         self.queue = deque(maxlen=max_size)
         self.lock = threading.Lock()
         self.position_counter = 0
+        self.cleanup_threshold = max_size * 0.8
     
     def add(self, entry: CowDataEntry) -> None:
         """Add entry to queue"""
@@ -63,7 +64,32 @@ class CircularQueue:
             entry.position = self.position_counter
             self.position_counter += 1
             self.queue.append(entry)
+
+            if len(self.queue) >= self.cleanup_threshold:
+                self._cleanup_old_entries()
     
+    def _cleanup_old_entries(self) -> int:
+        """Remove old processed entries to free space"""
+        cutoff_time = datetime.now() - timedelta(hours=2)  # Keep last 2 hours
+        
+        # Count entries to remove (processed and old)
+        to_remove = []
+        for i, entry in enumerate(self.queue):
+            if entry.processed and entry.timestamp < cutoff_time:
+                to_remove.append(i)
+        
+        removed_count = 0
+        # Remove from the end to avoid index shifting issues
+        for i in reversed(to_remove[-50:]):  # Remove max 50 at a time
+            if i < len(self.queue):
+                del self.queue[i]
+                removed_count += 1
+        
+        if removed_count > 0:
+            logging.getLogger(__name__).debug(f"Cleaned up {removed_count} old entries from queue")
+        
+        return removed_count
+
     def get_by_offset(self, offset: int) -> Optional[CowDataEntry]:
         """Get entry by position offset (newest - offset)"""
         with self.lock:
@@ -395,7 +421,12 @@ class CowDataProcessor:
         self.logger = logging.getLogger(__name__)
         self.last_sent_stall = -1
         # Initialize components
-        self.queue = CircularQueue(self.config.getint('processing', 'parlor_stalls', fallback=100))
+        transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
+        parlor_stalls = self.config.getint('processing', 'parlor_stalls', fallback=100)
+        queue_size = max(1000, transmission_offset * 3, parlor_stalls * 5)  # Enhanced sizing
+        
+        # Initialize components
+        self.queue = CircularQueue(queue_size)
         self.id_mapping = IDMapping(self.config.get('files', 'eid_map_csv'))
         self.log_monitor = LogFileMonitor(self.config.get('files', 'parlor_log'))
         self.output_mode = self.config.get('output', 'mode', fallback='revpi').lower()
@@ -434,7 +465,8 @@ class CowDataProcessor:
                 'parlor_interval': '3',
                 'parlor_stalls': '100',
                 'transmission_offset': '60',
-                'output_delay': '0.5'
+                'output_delay': '0.5',
+                'queue_cleanup_interval': '300'
             },
             'network': {
                 'revpi_host': '192.168.1.100',
@@ -566,19 +598,38 @@ class CowDataProcessor:
                 sequence.append(stall_num)
         
         return sequence
+    
+    def _interruptible_sleep(self, duration: float) -> bool:
+        """
+        Sleep that can be interrupted by checking running flag.
+        Returns True if sleep completed normally, False if interrupted.
+        """
+        start_time = time.time()
+        while time.time() - start_time < duration:
+            if not self.running:
+                return False
+            time.sleep(0.1)  # Check every 100ms
+        return True
     def _main_loop(self):
         """Main processing loop"""
         parlor_interval = self.config.getfloat('processing', 'parlor_interval', fallback=3.0)
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
         output_delay = self.config.getfloat('processing', 'output_delay', fallback=2.0)
-        max_stalls = self.config.getint('processing', 'parlor_stalls', fallback=114)  # Add this to config
+        max_stalls = self.config.getint('processing', 'parlor_stalls', fallback=114)
+        cleanup_interval = self.config.getint('processing', 'queue_cleanup_interval', fallback=300)
 
         self.id_mapping.load_mapping()
-        last_mapping_check = int(time.time())  # mark it so we don't reload immediately
+        last_mapping_check = int(time.time())
         mapping_parlor_interval = 60*60  # Check mapping file every hour
-
+        last_cleanup = int(time.time())
+        first_time = True
+        
         while self.running:
             try:
+                if not self.running:
+                    self.logger.info("Shutdown requested, exiting main loop")
+                    break
+                    
                 # Check for ID mapping updates
                 current_time = time.time()
                 if int(current_time) % 3600 == 0 and last_mapping_check != int(current_time):
@@ -586,94 +637,119 @@ class CowDataProcessor:
                     last_mapping_check = int(current_time)
                     self.logger.info(f"Checking for EID Map CSV file updates every {mapping_parlor_interval / 60:.0f} minutes...")
 
-                
+                if int(current_time) - last_cleanup >= cleanup_interval:
+                    cleaned = self.queue._cleanup_old_entries()
+                    if cleaned > 0:
+                        self.stats['queue_cleanups'] += 1
+                        self.logger.info(f"Queue cleanup: removed {cleaned} old entries")
+                    last_cleanup = int(current_time)
+                    
                 # Check for new log entries
                 new_entries = self.log_monitor.check_for_updates()
                 
-                # Process new entries
-                for entry in new_entries:
-                    # Get EID for animal ID
-                    entry.eid = self.id_mapping.get_eid(entry.animal_tag)
-                    
-                    # Add to queue
-                    self.queue.add(entry)
+                # Only proceed with processing if there are new entries
+                if new_entries:
+                    # Process new entries
+                    for entry in new_entries:
+                        if not self.running:  # Check during processing
+                            break
+                        # Get EID for animal ID
+                        entry.eid = self.id_mapping.get_eid(entry.animal_tag)
+                        
+                        # Add to queue
+                        self.queue.add(entry)
 
-                    if entry.eid:
-                        self.logger.info(
-                            f"New Animal: "
-                            f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
-                        )
-                    else:
-                        self.logger.info(
-                            f"New Animal: "
-                            f"{entry.stall}-{entry.animal_tag}-NO_EID"
-        )
-                
-                # Check for entries ready for transmission
-                target_entry = self.queue.get_by_offset(transmission_offset)
-
-                if target_entry:
-                    # Find target stall index (1..parlor_stalls)
-                    target_stall_index = int(target_entry.stall.replace("ST", ""))
-                    
-                    # Get sequence of stalls to transmit (handles rotation)
-                    stalls_to_transmit = self._get_stall_transmission_sequence(
-                        self.last_sent_stall, 
-                        target_stall_index, 
-                        max_stalls
-                    )
-                    
-                    self.logger.info(f"Transmitting stalls: {stalls_to_transmit[0] if stalls_to_transmit else 'none'} to {stalls_to_transmit[-1] if stalls_to_transmit else 'none'}")
-
-                    # Transmit each stall in sequence
-                    for stall_num in stalls_to_transmit:
-                        stall_name = f"ST{stall_num:03d}"
-                        candidate = next(
-                            (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
-                            None
-                        )
-
-                        if candidate:
-                            # Normal case: send actual data
-                            eid_to_send = candidate.eid if candidate.eid else "0"
-                            success = self.output_handler.send_data(candidate.stall, eid_to_send, candidate.animal_tag)
-
-                            if success:
-                                self.queue.mark_processed(candidate.position)
-                                self.stats['processed_today'] += 1
-                                self.stats['last_transmission'] = datetime.now()
-                                self.last_sent_stall = stall_num
-                                time.sleep(output_delay)
-                            else:
-                                self.stats['errors_today'] += 1
-                                break  # stop here and retry in next loop
-
+                        if entry.eid:
+                            self.logger.info(
+                                f"New Stall: "
+                                f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
+                            )
                         else:
-                            # Stall missing in logs → send placeholder
-                            if stall_name == 'ST000':
-                                continue
-                            success = self.output_handler.send_data(stall_name, "0", "0")
-                            if success:
-                                self.stats['processed_today'] += 1
-                                self.stats['last_transmission'] = datetime.now()
-                                self.last_sent_stall = stall_num
-                                time.sleep(output_delay)
-                            else:
-                                self.stats['errors_today'] += 1
+                            self.logger.info(
+                                f"New Stall: "
+                                f"{entry.stall}-{entry.animal_tag}-NO_EID"
+                            )
+                    
+                    # Check for entries ready for transmission (ONLY when new data exists)
+                    target_entry = self.queue.get_by_offset(transmission_offset)
+                    
+                    if target_entry:
+                        # Find target stall index (1..parlor_stalls)
+                        target_stall_index = int(target_entry.stall.replace("ST", ""))
+                        if first_time:
+                            self.last_sent_stall = target_stall_index
+                            first_time = False
+                        
+                        # Get sequence of stalls to transmit (handles rotation)
+                        stalls_to_transmit = self._get_stall_transmission_sequence(
+                            self.last_sent_stall, 
+                            target_stall_index, 
+                            max_stalls
+                        )
+                        
+                        # Transmit each stall in sequence
+                        for stall_num in stalls_to_transmit:
+                            if not self.running:
+                                self.logger.info("Shutdown requested during transmission, stopping")
                                 break
+                                
+                            stall_name = f"ST{stall_num:03d}"
+                            candidate = next(
+                                (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
+                                None
+                            )
 
+                            if candidate:
+                                # Normal case: send actual data
+                                eid_to_send = candidate.eid if candidate.eid else "0"
+                                success = self.output_handler.send_data(candidate.stall, eid_to_send, candidate.animal_tag)
 
+                                if success:
+                                    self.queue.mark_processed(candidate.position)
+                                    self.stats['processed_today'] += 1
+                                    self.stats['last_transmission'] = datetime.now()
+                                    self.last_sent_stall = stall_num
+                                    if not self._interruptible_sleep(output_delay):
+                                        self.logger.info("Sleep interrupted by shutdown signal")
+                                        break
+                                else:
+                                    self.stats['errors_today'] += 1
+                                    break  # stop here and retry in next loop
+
+                            else:
+                                # Stall missing in logs → send placeholder
+                                if stall_name == 'ST000':
+                                    continue
+                                success = self.output_handler.send_data(stall_name, "0", "0")
+                                if success:
+                                    self.stats['processed_today'] += 1
+                                    self.stats['last_transmission'] = datetime.now()
+                                    self.last_sent_stall = stall_num
+                                    if not self._interruptible_sleep(output_delay):
+                                        self.logger.info("Sleep interrupted by shutdown signal")
+                                        break
+                                else:
+                                    self.stats['errors_today'] += 1
+                                    break
+                else:
+                    # No new entries - just log occasionally that we're waiting
+                    if int(current_time) % 300 == 0:  # Every 5 minutes
+                        self.logger.debug("No new parlor data - waiting for log updates...")
                 
                 # Log periodic status
                 if int(current_time) % 300 == 0:  # Every 5 minutes
                     self._log_status()
                 
-                time.sleep(parlor_interval)
-                
+                # Sleep before next iteration
+                if not self._interruptible_sleep(parlor_interval):
+                    self.logger.info("Main loop sleep interrupted by shutdown")
+                    break
+                    
             except Exception as e:
                 self.logger.error(f"Error in main loop iteration: {e}")
                 self.stats['errors_today'] += 1
-                time.sleep(parlor_interval)
+                if not self._interruptible_sleep(parlor_interval):
+                    break
     
     def _log_status(self):
         """Log current system status with rotation info"""
