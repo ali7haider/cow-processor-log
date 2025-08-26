@@ -68,6 +68,30 @@ class CircularQueue:
             if len(self.queue) >= self.cleanup_threshold:
                 self._cleanup_old_entries()
     
+    def mark_processed(
+        self,
+        stall: str,
+        animal_tag: str,
+        eid: str,
+        timestamp: datetime
+    ) -> bool:
+        """Mark entry as processed by matching stall, animal_tag, eid and timestamp."""
+        with self.lock:
+            for entry in self.queue:
+                if (
+                    entry.stall == stall
+                    and entry.animal_tag == animal_tag
+                    and entry.eid == eid
+                    and entry.timestamp == timestamp
+                ):
+                    entry.processed = True
+                    print(f"Marked as processed: {entry}")
+                    return True
+
+            print("No matching entry found to mark as processed")
+            return False
+
+
     def _cleanup_old_entries(self) -> int:
         """Remove old processed entries to free space"""
         cutoff_time = datetime.now() - timedelta(hours=2)  # Keep last 2 hours
@@ -95,7 +119,6 @@ class CircularQueue:
         with self.lock:
             if len(self.queue) <= offset:
                 return None
-            
             # Get entry from offset positions back
             target_position = self.position_counter - offset - 1
             for entry in reversed(self.queue):
@@ -103,14 +126,14 @@ class CircularQueue:
                     return entry
             return None
     
-    def mark_processed(self, position: int) -> bool:
-        """Mark entry as processed"""
-        with self.lock:
-            for entry in self.queue:
-                if entry.position == position:
-                    entry.processed = True
-                    return True
-            return False
+    # def mark_processed(self, position: int) -> bool:
+    #     """Mark entry as processed"""
+    #     with self.lock:
+    #         for entry in self.queue:
+    #             if entry.position == position:
+    #                 entry.processed = True
+    #                 return True
+    #         return False
     
     def get_status(self) -> dict:
         """Get queue status"""
@@ -219,7 +242,7 @@ class LogFileMonitor:
         self.prev_entries = set()
 
         self.rotation_pattern = re.compile(
-    r'"RotaryAuto:(Forward|Reverse) rotation processing complete\. '
+    r'"RotaryAuto:(Forward|Backward) rotation processing complete\. '
     r'Stall: (ST\d+), Stall Tag: \d+, Animal (\d*),'
 )
 
@@ -236,17 +259,26 @@ class LogFileMonitor:
             current_modified = os.path.getmtime(self.log_path)
             file_size = os.path.getsize(self.log_path)
 
-            # Detect rotation
-            if current_modified != self.last_modified or file_size < self.last_position:
-                self.last_position = 0
-                self.last_modified = current_modified
-                self.logger.info("Parlor position updated")
+            # First run - read entire file
+            if self.last_modified == 0:
+                self.last_position = 0  # Start from beginning
+                self.logger.info("First run, reading entire log file")
+            # Detect rotation (file got smaller or modified time changed significantly)
+            elif file_size < self.last_position or abs(current_modified - self.last_modified) > 5:
+                self.last_position = 0  # Read from beginning for rotated file
+                self.logger.info("Log file rotated, reading from beginning")
+            # Normal case - file was appended to
+            elif file_size > self.last_position:
+                pass  # Continue reading from last_position
+            else:
+                # No changes
+                return entries
 
-            # Read new data
+            # Read data from current position
             with open(self.log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 f.seek(self.last_position)
                 new_content = f.read()
-                self.last_position = f.tell()
+                new_position = f.tell()  # Get position after reading
 
             if new_content:
                 parsed_entries = self._parse_log_content(new_content)
@@ -266,11 +298,15 @@ class LogFileMonitor:
                 
                 entries = new_unique_entries
 
+            # Update tracking variables AFTER successful processing
+            self.last_modified = current_modified
+            self.last_position = new_position  # Update to new position
+
         except Exception as e:
             self.logger.error(f"Error reading log file: {e}")
 
         return entries
-    
+        
     def _parse_log_content(self, content: str) -> List[CowDataEntry]:
         """Parse log content for rotation events"""
         entries = []
@@ -278,7 +314,7 @@ class LogFileMonitor:
         
         for line in lines:
             if "RotaryAuto:Forward rotation processing complete" in line or \
-           "RotaryAuto:Reverse rotation processing complete" in line:
+           "RotaryAuto:Backward rotation processing complete" in line:
                 entry = self._parse_rotation_line(line)
                 if entry:
                     entries.append(entry)
@@ -419,7 +455,7 @@ class CowDataProcessor:
         self.running = False
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
-        self.last_sent_stall = -1
+        self.last_sent_stall = None
         # Initialize components
         transmission_offset = self.config.getint('processing', 'transmission_offset', fallback=60)
         parlor_stalls = self.config.getint('processing', 'parlor_stalls', fallback=100)
@@ -646,91 +682,118 @@ class CowDataProcessor:
                     
                 # Check for new log entries
                 new_entries = self.log_monitor.check_for_updates()
-                
-                # Only proceed with processing if there are new entries
+
                 if new_entries:
-                    # Process new entries
-                    for entry in new_entries:
-                        if not self.running:  # Check during processing
+                    for entry in new_entries[-65:]:
+                        if not self.running:
                             break
-                        # Get EID for animal ID
+
+                        # --- GAP FILLING BASED ON STALL NUMBER ---
+                        if self.queue.queue:  # only if queue already has entries
+                            # Extract last stall number in queue
+                            last_stall = self.queue.queue[-1].stall  # e.g., "ST079"
+                            last_num = int(last_stall[2:])  # → 79
+
+                            # Extract new stall number
+                            current_num = int(entry.stall[2:])  # e.g., "82"
+
+                            # If new stall is ahead, check for missing stalls
+                            if current_num > last_num + 1:
+                                for s in range(last_num + 1, current_num):
+                                    placeholder = CowDataEntry(
+                                        stall=f"ST{s:03d}",
+                                        animal_tag="0",
+                                        eid="0",
+                                        position=0,
+                                        timestamp=datetime.now(),
+                                    )
+                                    self.queue.add(placeholder)
+                                    
+                                    self.logger.info(
+                                        f"New Placeholder Stall: {placeholder.stall}-{placeholder.animal_tag}-{placeholder.eid} - {placeholder.position}"
+                                    )
+
+                        # --- NORMAL ENTRY ADDITION ---
                         entry.eid = self.id_mapping.get_eid(entry.animal_tag)
-                        
-                        # Add to queue
                         self.queue.add(entry)
 
                         if entry.eid:
                             self.logger.info(
-                                f"New Stall: "
-                                f"{entry.stall}-{entry.animal_tag}-{entry.eid}"
+                                f"New Stall: {entry.stall}-{entry.animal_tag}-{entry.eid} - {entry.position}"
                             )
                         else:
                             self.logger.info(
-                                f"New Stall: "
-                                f"{entry.stall}-{entry.animal_tag}-NO_EID"
+                                f"New Stall: {entry.stall}-{entry.animal_tag}-NO_EID - {entry.position}"
                             )
+
                     
                     # Check for entries ready for transmission (ONLY when new data exists)
                     target_entry = self.queue.get_by_offset(transmission_offset)
                     
                     if target_entry:
-                        # Find target stall index (1..parlor_stalls)
-                        target_stall_index = int(target_entry.stall.replace("ST", ""))
-                        if first_time:
-                            self.last_sent_stall = target_stall_index
-                            first_time = False
-                        
+                        # target_stall_index = int(target_entry.stall.replace("ST", ""))
+                        # print(self.last_sent_stall,target_stall_index)
                         # Get sequence of stalls to transmit (handles rotation)
-                        stalls_to_transmit = self._get_stall_transmission_sequence(
-                            self.last_sent_stall, 
-                            target_stall_index, 
-                            max_stalls
-                        )
-                        
+                        # stalls_to_transmit = self._get_stall_transmission_sequence(
+                        #     self.last_sent_stall, 
+                        #     target_stall_index, 
+                        #     max_stalls
+                        # )
+                        # print("stalls to transmit", stalls_to_transmit)
                         # Transmit each stall in sequence
-                        for stall_num in stalls_to_transmit:
-                            if not self.running:
-                                self.logger.info("Shutdown requested during transmission, stopping")
-                                break
-                                
-                            stall_name = f"ST{stall_num:03d}"
-                            candidate = next(
-                                (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
-                                None
+                        eid_to_send = target_entry.eid if target_entry.eid else "0"
+                        success = self.output_handler.send_data(target_entry.stall, eid_to_send, target_entry.animal_tag)
+                        if success:
+                            self.last_sent_stall = target_entry
+                            self.queue.mark_processed(
+                                target_entry.stall,
+                                target_entry.animal_tag,
+                                target_entry.eid,
+                                target_entry.timestamp
                             )
+                        # for stall_num in stalls_to_transmit:
+                        #     if not self.running:
+                        #         self.logger.info("Shutdown requested during transmission, stopping")
+                        #         break
+                                
+                        #     stall_name = f"ST{stall_num:03d}"
+                        #     candidate = next(
+                        #         (e for e in self.queue.queue if e.stall == stall_name and not e.processed),
+                        #         None
+                        #     )
 
-                            if candidate:
-                                # Normal case: send actual data
-                                eid_to_send = candidate.eid if candidate.eid else "0"
-                                success = self.output_handler.send_data(candidate.stall, eid_to_send, candidate.animal_tag)
+                        #     if candidate:
+                        #         # Normal case: send actual data
+                        #         eid_to_send = candidate.eid if candidate.eid else "0"
+                        #         success = self.output_handler.send_data(candidate.stall, eid_to_send, candidate.animal_tag)
 
-                                if success:
-                                    self.queue.mark_processed(candidate.position)
-                                    self.stats['processed_today'] += 1
-                                    self.stats['last_transmission'] = datetime.now()
-                                    self.last_sent_stall = stall_num
-                                    if not self._interruptible_sleep(output_delay):
-                                        self.logger.info("Sleep interrupted by shutdown signal")
-                                        break
-                                else:
-                                    self.stats['errors_today'] += 1
-                                    break  # stop here and retry in next loop
+                        #         if success:
+                        #             self.queue.mark_processed(candidate.position)
+                        #             self.stats['processed_today'] += 1
+                        #             self.stats['last_transmission'] = datetime.now()
+                        #             self.last_sent_stall = stall_num
+                        #             if not self._interruptible_sleep(output_delay):
+                        #                 self.logger.info("Sleep interrupted by shutdown signal")
+                        #                 break
+                        #         else:
+                        #             self.stats['errors_today'] += 1
+                        #             break  # stop here and retry in next loop
 
-                            else:
-                                # Stall missing in logs → send placeholder
-                                if stall_name == 'ST000':
-                                    continue
-                                success = self.output_handler.send_data(stall_name, "0", "0")
-                                if success:
-                                    self.stats['processed_today'] += 1
-                                    self.stats['last_transmission'] = datetime.now()
-                                    self.last_sent_stall = stall_num
-                                    if not self._interruptible_sleep(output_delay):
-                                        self.logger.info("Sleep interrupted by shutdown signal")
-                                        break
-                                else:
-                                    self.stats['errors_today'] += 1
-                                    break
+                        #     else:
+                        #         # Stall missing in logs → send placeholder
+                        #         if stall_name == 'ST000':
+                        #             continue
+                        #         success = self.output_handler.send_data(stall_name, "0", "0")
+                        #         if success:
+                        #             self.stats['processed_today'] += 1
+                        #             self.stats['last_transmission'] = datetime.now()
+                        #             self.last_sent_stall = stall_num
+                        #             if not self._interruptible_sleep(output_delay):
+                        #                 self.logger.info("Sleep interrupted by shutdown signal")
+                        #                 break
+                        #         else:
+                        #             self.stats['errors_today'] += 1
+                        #             break
                 else:
                     # No new entries - just log occasionally that we're waiting
                     if int(current_time) % 300 == 0:  # Every 5 minutes

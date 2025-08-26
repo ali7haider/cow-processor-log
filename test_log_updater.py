@@ -46,7 +46,7 @@ def load_csv_animals(csv_path):
                 animals.append(animal_id)
     return animals
 
-_stall_counter = 1  # global counter or class variable
+_stall_counter = 49 # global counter or class variable
 
 def append_log_entries(animals, count=3):
     """Append multiple log entries at once with sequential Stall IDs that wrap at 114"""
